@@ -1,4 +1,4 @@
-// simple.c
+// hardcoded.c
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -7,31 +7,15 @@
 typedef struct { double r; double i; } complex;
 
 void interpret(complex *registers, char const *code) {
-  complex *src, *dst;
+  complex *a = &registers[0];
+  complex *b = &registers[1];
   double r, i;
-  for (; *code; code += 3) {
-    dst = &registers[code[2] - 'a'];
-    src = &registers[code[1] - 'a'];
-    switch (*code) {
-      case '=':
-        dst->r = src->r;
-        dst->i = src->i;
-        break;
-      case '+':
-        dst->r += src->r;
-        dst->i += src->i;
-        break;
-      case '*':
-        r = dst->r * src->r - dst->i * src->i;
-        i = dst->r * src->i + dst->i * src->r;
-        dst->r = r;
-        dst->i = i;
-        break;
-      default:
-        fprintf(stderr, "undefined instruction %s (ASCII %x)\n", code, *code);
-        exit(1);
-    }
-  }
+  r = b->r * b->r - b->i * b->i;
+  i = b->r * b->i + b->i * b->r;
+  b->r = r;
+  b->i = i;
+  b->r += a->r;
+  b->i += a->i;
 }
 
 int main(int argc, char **argv) {

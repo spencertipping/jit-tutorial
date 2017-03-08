@@ -22,8 +22,9 @@ To keep it simple, our processor has four complex-valued registers called `a`,
 
 For each pixel, the interpreter will zero all of the registers and then set `a`
 to the current pixel's coordinates. It then iterates the machine code for up to
-255 iterations waiting for register `b` to "overflow" (i.e. for its complex
-absolute value to exceed 2).
+256 iterations waiting for register `b` to "overflow" (i.e. for its complex
+absolute value to exceed 2). That means that the code for a standard Mandelbrot
+set is `*bb+ab`.
 
 ### Simple interpreter
 The first thing to do is write up a bare-bones interpreter in C. It would be
@@ -72,17 +73,18 @@ void interpret(complex *registers, char const *code) {
 int main(int argc, char **argv) {
   complex registers[4];
   int i, x, y;
-  printf("P2\n%d %d\n%d\n", 800, 800, 255);
-  for (y = 0; y < 800; ++y) {
-    for (x = 0; x < 800; ++x) {
-      registers[0].r = -2 + 4 * (x / 800.0);
-      registers[0].i = -2 + 4 * (y / 800.0);
+  char line[1600];
+  printf("P5\n%d %d\n%d\n", 1600, 900, 255);
+  for (y = 0; y < 900; ++y) {
+    for (x = 0; x < 1600; ++x) {
+      registers[0].r = 2 * 1.6 * (x / 1600.0 - 0.5);
+      registers[0].i = 2 * 0.9 * (y /  900.0 - 0.5);
       for (i = 1; i < 4; ++i) registers[i].r = registers[i].i = 0;
-      for (i = 0; i < 255 && sqr(registers[1].r) + sqr(registers[1].i) < 4; ++i)
+      for (i = 0; i < 256 && sqr(registers[1].r) + sqr(registers[1].i) < 4; ++i)
         interpret(registers, argv[1]);
-      printf(" %d", 255 - i);
+      line[x] = i;
     }
-    printf("\n");
+    fwrite(line, 1, sizeof(line), stdout);
   }
   return 0;
 }
@@ -94,7 +96,70 @@ Now we can see the results by using `display` from ImageMagick
 ```sh
 $ gcc simple.c -o simple
 $ ./simple *bb+ab | display -           # imagemagick version
-$ ./simple *bb+ab > output.ppm          # save a grayscale PPM image
+$ ./simple *bb+ab > output.pgm          # save a grayscale PPM image
+$ time ./simple *bb+ab > /dev/null      # quick benchmark
+real	0m2.369s
+user	0m2.364s
+sys	0m0.000s
+$
 ```
 
-![image](http://storage8.static.itmages.com/i/17/0308/h_1488995804_6848135_3dd0ab2cdf.jpeg)
+![image](http://storage2.static.itmages.com/i/17/0308/h_1488996910_5153802_e6927d8be0.jpeg)
+
+### Performance analysis
+JIT can basically eliminate the interpreter overhead, which we can easily model
+here by replacing `interpret()` with a hard-coded Mandelbrot calculation. This
+will provide an upper bound on realistic JIT performance, since we're unlikely
+to optimize as well as `gcc` does.
+
+```c
+// hardcoded.c
+#include <stdio.h>
+#include <stdlib.h>
+
+#define sqr(x) ((x) * (x))
+
+typedef struct { double r; double i; } complex;
+
+void interpret(complex *registers, char const *code) {
+  complex *a = &registers[0];
+  complex *b = &registers[1];
+  double r, i;
+  r = b->r * b->r - b->i * b->i;
+  i = b->r * b->i + b->i * b->r;
+  b->r = r;
+  b->i = i;
+  b->r += a->r;
+  b->i += a->i;
+}
+
+int main(int argc, char **argv) {
+  complex registers[4];
+  int i, x, y;
+  char line[1600];
+  printf("P5\n%d %d\n%d\n", 1600, 900, 255);
+  for (y = 0; y < 900; ++y) {
+    for (x = 0; x < 1600; ++x) {
+      registers[0].r = 2 * 1.6 * (x / 1600.0 - 0.5);
+      registers[0].i = 2 * 0.9 * (y /  900.0 - 0.5);
+      for (i = 1; i < 4; ++i) registers[i].r = registers[i].i = 0;
+      for (i = 0; i < 256 && sqr(registers[1].r) + sqr(registers[1].i) < 4; ++i)
+        interpret(registers, argv[1]);
+      line[x] = i;
+    }
+    fwrite(line, 1, sizeof(line), stdout);
+  }
+  return 0;
+}
+```
+
+This version runs about twice as fast as the simple interpreter:
+
+```sh
+$ gcc hardcoded.c -o hardcoded
+$ time ./hardcoded *bb+ab > /dev/null
+real	0m1.329s
+user	0m1.328s
+sys	0m0.000s
+$
+```
