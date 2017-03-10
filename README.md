@@ -376,7 +376,7 @@ fn compile_identity(void) {
   // ret
   memory[i++] = 0xc3;           // RET opcode
 
-  return (long(*)(long)) memory;
+  return (fn) memory;
 }
 
 int main() {
@@ -384,7 +384,7 @@ int main() {
   int i;
   for (i = 0; i < 10; ++i)
     printf("f(%d) = %ld\n", i, (*f)(i));
-  munmap((void*) f, 4096);
+  munmap(f, 4096);
   return 0;
 }
 ```
