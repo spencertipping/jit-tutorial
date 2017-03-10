@@ -163,3 +163,120 @@ user	0m1.328s
 sys	0m0.000s
 $
 ```
+
+### JIT design
+The basic strategy is to replace `interpret(registers, code)` with a function
+`compile(code)` that returns a pointer to a function whose signature is this:
+`void compiled(registers*)`. The memory for the function needs to be allocated
+using `mmap` so we can set permission for the processor to execute it.
+
+The easiest way to start with something like this is probably to emit the
+assembly for `simple.c` to see how it works:
+
+```sh
+$ gcc -S simple.c
+```
+
+Edited/annotated highlights from the assembly `simple.s` (whose floating-point
+code is a little circuitous):
+
+```s
+interpret:
+	pushq	%rbp
+	movq	%rsp, %rbp              // standard x86-64 function header
+	subq	$48, %rsp               // allocate space for local variables
+	movq	%rdi, -40(%rbp)         // callee saves %rsi and %rdi
+	movq	%rsi, -48(%rbp)
+	jmp	for_loop_condition
+
+for_loop_body:
+	<a bunch of stuff>
+	cmpl	$43, %eax               // case '+'
+	je	add_branch
+	cmpl	$61, %eax               // case '='
+	je	assign_branch
+	cmpl	$42, %eax               // case '*'
+	je	mult_branch
+	jmp	switch_default          // default
+
+assign_branch:
+        // the "bunch of stuff" above calculated *src and *dst, which are
+        // stored in -24(%rbp) and -32(%rbp).
+	movq	-24(%rbp), %rax         // %rax = src
+	movsd	(%rax), %xmm0           // %xmm0 = src.r
+	movq	-32(%rbp), %rax         // %rax = dst
+	movsd	%xmm0, (%rax)           // dst.r = %xmm0
+
+	movq	-24(%rbp), %rax         // %rax = src
+	movsd	8(%rax), %xmm0          // %xmm0 = src.i
+	movq	-32(%rbp), %rax         // %rax = dst
+	movsd	%xmm0, 8(%rax)          // dst.i = %xmm0
+
+	jmp	for_loop_step
+
+add_branch:
+	movq	-32(%rbp), %rax         // %rax = dst
+	movsd	(%rax), %xmm1           // %xmm1 = dst.r
+	movq	-24(%rbp), %rax         // %rax = src
+	movsd	(%rax), %xmm0           // %xmm0 = src.r
+	addsd	%xmm1, %xmm0            // %xmm0 += %xmm1
+	movq	-32(%rbp), %rax         // %rax = dst
+	movsd	%xmm0, (%rax)           // dst.r = %xmm0
+
+	movq	-32(%rbp), %rax         // same thing for src.i and dst.i
+	movsd	8(%rax), %xmm1
+	movq	-24(%rbp), %rax
+	movsd	8(%rax), %xmm0
+	addsd	%xmm1, %xmm0
+	movq	-32(%rbp), %rax
+	movsd	%xmm0, 8(%rax)
+
+	jmp	for_loop_step
+
+mult_branch:
+	movq	-32(%rbp), %rax
+	movsd	(%rax), %xmm1
+	movq	-24(%rbp), %rax
+	movsd	(%rax), %xmm0
+	mulsd	%xmm1, %xmm0
+	movq	-32(%rbp), %rax
+	movsd	8(%rax), %xmm2
+	movq	-24(%rbp), %rax
+	movsd	8(%rax), %xmm1
+	mulsd	%xmm2, %xmm1
+	subsd	%xmm1, %xmm0
+	movsd	%xmm0, -16(%rbp)        // double r = src.r*dst.r - src.i*dst.i
+
+	movq	-32(%rbp), %rax
+	movsd	(%rax), %xmm1
+	movq	-24(%rbp), %rax
+	movsd	8(%rax), %xmm0
+	mulsd	%xmm0, %xmm1
+	movq	-32(%rbp), %rax
+	movsd	8(%rax), %xmm2
+	movq	-24(%rbp), %rax
+	movsd	(%rax), %xmm0
+	mulsd	%xmm2, %xmm0
+	addsd	%xmm1, %xmm0
+	movsd	%xmm0, -8(%rbp)         // double i = src.r*dst.i + src.i*dst.r
+
+	movq	-32(%rbp), %rax
+	movsd	-16(%rbp), %xmm0
+	movsd	%xmm0, (%rax)           // dst.r = r
+	movq	-32(%rbp), %rax
+	movsd	-8(%rbp), %xmm0
+	movsd	%xmm0, 8(%rax)          // dst.i = i
+	jmp	for_loop_step
+
+for_loop_step:
+	addq	$3, -48(%rbp)
+
+for_loop_condition:
+	movq	-48(%rbp), %rax
+	movzbl	(%rax), %eax
+	testb	%al, %al
+	jne	.L8
+	nop
+	leave                           // reset %rsp
+	ret                             // pop and jmp
+```
