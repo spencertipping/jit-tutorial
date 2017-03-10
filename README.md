@@ -177,20 +177,31 @@ assembly for `simple.c` to see how it works:
 $ gcc -S simple.c
 ```
 
-Edited/annotated highlights from the assembly `simple.s` (whose floating-point
-code is a little circuitous):
+Edited/annotated highlights from the assembly `simple.s`, which is much more
+complicated than what we'll end up generating:
 
 ```s
 interpret:
+        // The stack contains local variables referenced to the "base pointer"
+        // stored in hardware register %rbp. Here's the layout:
+        //
+        //   double i  = -8(%rbp)
+        //   double r  = -16(%rbp)
+        //   src       = -24(%rbp)
+        //   dst       = -32(%rbp)
+        //   registers = -40(%rbp)      <- comes in as an argument in %rdi
+        //   code      = -48(%rbp)      <- comes in as an argument in %rsi
+
         pushq   %rbp
         movq    %rsp, %rbp              // standard x86-64 function header
-        subq    $48, %rsp               // allocate space for local variables
-        movq    %rdi, -40(%rbp)         // callee saves %rsi and %rdi
-        movq    %rsi, -48(%rbp)
-        jmp     for_loop_condition
+        subq    $48, %rsp               // allocate space for six local vars
+        movq    %rdi, -40(%rbp)         // registers arg -> local var
+        movq    %rsi, -48(%rbp)         // code arg -> local var
+        jmp     for_loop_condition      // commence loopage
 
 for_loop_body:
-        <a bunch of stuff>
+        // (a bunch of stuff to set up *src and *dst)
+
         cmpl    $43, %eax               // case '+'
         je      add_branch
         cmpl    $61, %eax               // case '='
@@ -272,11 +283,125 @@ for_loop_step:
         addq    $3, -48(%rbp)
 
 for_loop_condition:
-        movq    -48(%rbp), %rax
-        movzbl  (%rax), %eax
-        testb   %al, %al
-        jne     .L8
-        nop
-        leave                           // reset %rsp
+        movq    -48(%rbp), %rax         // %rax = code (the pointer)
+        movzbl  (%rax), %eax            // %eax = *code (move one byte)
+        testb   %al, %al                // is %eax 0?
+        jne     for_loop_body           // if no, then continue
+
+        leave                           // otherwise rewind stack
         ret                             // pop and jmp
+```
+
+#### Compilation strategy
+Most of the above is register-shuffling fluff that we can get rid of. We're
+compiling the code up front, which means all of our register addresses are
+known quantities and we won't need any unknown indirection at runtime. So all
+of the shuffling into and out of `%rax` can be replaced by a much simpler move
+directly to or from `N(%rdi)` -- since `%rdi` is the argument that points to
+the first register's real component.
+
+If you haven't already, at this point I'd recommend downloading the [Intel
+software developer's
+manual](https://software.intel.com/en-us/articles/intel-sdm), of which volume 2
+describes the semantics and machine code representation of every instruction.
+
+**NOTE:** GCC uses AT&T assembly syntax, whereas the Intel manuals use Intel
+assembly syntax. An important difference is that AT&T reverses the arguments:
+`mov %rax, %rbx` (AT&T syntax) assigns to `%rbx`, whereas `mov rax, rbx` (Intel
+syntax) assigns to `rax`. All of my code examples use AT&T, and none of this
+will matter once we're working with machine code.
+
+##### Example: the Mandelbrot function `*bb+ab`
+```s
+// Step 1: multiply register B by itself
+movsd 16(%rdi), %xmm0                   // %xmm0 = b.r
+movsd 24(%rdi), %xmm1                   // %xmm1 = b.i
+movsd 16(%rdi), %xmm2                   // %xmm2 = b.r
+movsd 24(%rdi), %xmm3                   // %xmm3 = b.i
+movsd %xmm0, %xmm4                      // %xmm4 = b.r
+mulsd %xmm2, %xmm4                      // %xmm4 = b.r*b.r
+movsd %xmm1, %xmm5                      // %xmm5 = b.i
+mulsd %xmm3, %xmm5                      // %xmm5 = b.i*b.i
+subsd %xmm5, %xmm4                      // %xmm4 = b.r*b.r - b.i*b.i
+movsd %xmm4, 16(%rdi)                   // b.r = %xmm4
+
+mulsd %xmm0, %xmm3                      // %xmm3 = b.r*b.i
+mulsd %xmm1, %xmm2                      // %xmm2 = b.i*b.r
+addsd %xmm3, %xmm2                      // %xmm2 = b.r*b.i + b.i*b.r
+movsd %xmm2, 24(%rdi)                   // b.i = %xmm2
+
+// Step 2: add register A to register B
+movpd (%rdi), %xmm0                     // %xmm0 = (a.r, a.i)
+addpd %xmm0, 16(%rdi)                   // (b.r, b.i) += %xmm0
+```
+
+The multiplication code isn't optimized for the squaring-a-register use case;
+instead, I left it fully general so we can use it as a template when we start
+generating machine code.
+
+### JIT mechanics
+Rather than compiling a real language, let's just get a basic JIT setup.
+
+```c
+// jitproto.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+
+typedef long(*fn)(long);
+
+fn compile_identity(void) {
+  // Allocate some memory and set its permissions correctly. In particular, we
+  // need PROT_EXEC (which isn't normally enabled for data memory, e.g. from
+  // malloc()), which tells the processor it's ok to execute it as machine
+  // code.
+  char *memory = mmap(NULL,             // address
+                      4096,             // size
+                      PROT_READ | PROT_WRITE | PROT_EXEC,
+                      MAP_PRIVATE | MAP_ANONYMOUS,
+                      -1,               // fd (not used here)
+                      0);               // offset (not used here)
+  if (!memory) {
+    perror("failed to allocate memory");
+    exit(1);
+  }
+
+  int i = 0;
+
+  // mov %rdi, %rax
+  memory[i++] = 0x48;           // REX.W prefix
+  memory[i++] = 0x8b;           // MOV opcode, register/register
+  memory[i++] = 0xc7;           // MOD/RM byte for %rdi -> %rax
+
+  // ret
+  memory[i++] = 0xc3;           // RET opcode
+
+  return (long(*)(long)) memory;
+}
+
+int main() {
+  fn f = compile_identity();
+  int i;
+  for (i = 0; i < 10; ++i)
+    printf("f(%d) = %ld\n", i, (*f)(i));
+  munmap((void*) f, 4096);
+  return 0;
+}
+```
+
+This does what we expect: we've just produced an identity function.
+
+```sh
+$ gcc jitproto.c -o jitproto
+$ ./jitproto
+f(0) = 0
+f(1) = 1
+f(2) = 2
+f(3) = 3
+f(4) = 4
+f(5) = 5
+f(6) = 6
+f(7) = 7
+f(8) = 8
+f(9) = 9
 ```
