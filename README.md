@@ -332,7 +332,8 @@ movsd %xmm2, 24(%rdi)                   // b.i = %xmm2
 
 // Step 2: add register A to register B
 movpd (%rdi), %xmm0                     // %xmm0 = (a.r, a.i)
-addpd %xmm0, 16(%rdi)                   // (b.r, b.i) += %xmm0
+addpd %xmm0, 16(%rdi)                   // %xmm0 += (b.r, b.i)
+movpd %xmm0, 16(%rdi)                   // (b.r, b.i) = %xmm0
 ```
 
 The multiplication code isn't optimized for the squaring-a-register use case;
@@ -340,7 +341,8 @@ instead, I left it fully general so we can use it as a template when we start
 generating machine code.
 
 ### JIT mechanics
-Rather than compiling a real language, let's just get a basic JIT setup.
+Before we compile a real language, let's just get a basic code generator
+working.
 
 ```c
 // jitproto.c
@@ -404,4 +406,178 @@ f(6) = 6
 f(7) = 7
 f(8) = 8
 f(9) = 9
+```
+
+#### Generating MandelASM machine code
+This is where we start to get some serious mileage out of the Intel manuals. We
+need encodings for the following instructions:
+
+- `f2 0f 11`: `movsd reg -> memory`
+- `f2 0f 10`: `movsd memory -> reg`
+- `f2 0f 59`: `mulsd reg <- reg` (**NB:** arg order is opposite of `addsd`)
+- `f2 0f 58`: `addsd reg -> reg`
+- `f2 0f 5c`: `subsd reg -> reg`
+- `66 0f 11`: `movpd reg -> memory` (technically `movupd` for unaligned move)
+- `66 0f 10`: `movpd memory -> reg`
+- `66 0f 58`: `addpd memory -> reg`
+
+##### The gnarly bits: how operands are specified
+Chapter 2 of the Intel manual volume 2 contains a roundabout, confusing
+description of operand encoding, so I'll try to sum up the basics here.
+(**TODO**)
+
+For the operators above, we've got two ModR/M configurations:
+
+- `movsd reg <-> X(%rdi)`: mod = 01, r/m = 111, disp8 = X
+- `addsd reg -> reg`: mod = 11
+
+At the byte level, they're written like this:
+
+```
+movsd %xmm0, 16(%rdi)           # f2 0f 11 47 10
+  # modr/m = b01 000 111 = 47
+  # disp   = 16          = 10
+
+addsd %xmm3, %xmm4              # f2 0f 58 e3
+  # modr/m = b11 100 011 = e3
+```
+
+##### A simple micro-assembler
+```h
+// micro-asm.h
+#include <stdarg.h>
+typedef struct {
+  char *dest;
+} microasm;
+
+// this makes it more obvious what we're doing later on
+#define xmm(n) (n)
+
+void asm_write(microasm *a, int n, ...) {
+  va_list bytes;
+  int i;
+  va_start(bytes, n);
+  for (i = 0; i < n; ++i) *(a->dest++) = (char) va_arg(bytes, int);
+  va_end(bytes);
+}
+
+void movsd_reg_memory(microasm *a, char reg, char disp)
+{ asm_write(a, 5, 0xf2, 0x0f, 0x11, 0x47 | reg << 3, disp); }
+
+void movsd_memory_reg(microasm *a, char disp, char reg)
+{ asm_write(a, 5, 0xf2, 0x0f, 0x10, 0x47 | reg << 3, disp); }
+
+void movsd_reg_reg(microasm *a, char src, char dst)
+{ asm_write(a, 4, 0xf2, 0x0f, 0x11, 0xc0 | src << 3 | dst); }
+
+void mulsd(microasm *a, char src, char dst)
+{ asm_write(a, 4, 0xf2, 0x0f, 0x59, 0xc0 | src << 3 | dst); }
+
+void addsd(microasm *a, char src, char dst)
+{ asm_write(a, 4, 0xf2, 0x0f, 0x58, 0xc0 | dst << 3 | src); }
+
+void subsd(microasm *a, char src, char dst)
+{ asm_write(a, 4, 0xf2, 0x0f, 0x5c, 0xc0 | dst << 3 | src); }
+
+void movpd_reg_memory(microasm *a, char reg, char disp)
+{ asm_write(a, 5, 0x66, 0x0f, 0x11, 0x47 | reg << 3, disp); }
+
+void movpd_memory_reg(microasm *a, char disp, char reg)
+{ asm_write(a, 5, 0x66, 0x0f, 0x10, 0x47 | reg << 3, disp); }
+
+void addpd_memory_reg(microasm *a, char disp, char reg)
+{ asm_write(a, 5, 0x66, 0x0f, 0x58, 0x47 | reg << 3, disp); }
+```
+
+##### Putting it all together
+Now that we can write assembly-level stuff, we can take the structure from the
+prototype JIT compiler and modify it to compile MandelASM.
+
+```c
+// mandeljit.c
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/mman.h>
+
+#include "micro-asm.h"
+
+#define sqr(x) ((x) * (x))
+
+typedef struct { double r; double i; } complex;
+typedef void(*compiled)(complex*);
+
+#define offsetof(type, field) ((unsigned long) &(((type *) 0)->field))
+
+compiled compile(char *code) {
+  char *memory = mmap(NULL, 4096, PROT_READ | PROT_WRITE | PROT_EXEC,
+                      MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+  microasm a = { .dest = memory };
+  char src_dsp, dst_dsp;
+  char const r = offsetof(complex, r);
+  char const i = offsetof(complex, i);
+
+  for (; *code; code += 3) {
+    src_dsp = sizeof(complex) * (code[1] - 'a');
+    dst_dsp = sizeof(complex) * (code[2] - 'a');
+    switch (*code) {
+      case '=':
+        movpd_memory_reg(&a, src_dsp, xmm(0));
+        movpd_reg_memory(&a, xmm(0), dst_dsp);
+        break;
+
+      case '+':
+        movpd_memory_reg(&a, src_dsp, xmm(0));
+        addpd_memory_reg(&a, dst_dsp, xmm(0));
+        movpd_reg_memory(&a, xmm(0), dst_dsp);
+        break;
+
+      case '*':
+        movsd_memory_reg(&a, src_dsp + r, xmm(0));
+        movsd_memory_reg(&a, src_dsp + i, xmm(1));
+        movsd_memory_reg(&a, dst_dsp + r, xmm(2));
+        movsd_memory_reg(&a, dst_dsp + i, xmm(3));
+        movsd_reg_reg   (&a, xmm(0), xmm(4));
+        mulsd           (&a, xmm(2), xmm(4));
+        movsd_reg_reg   (&a, xmm(1), xmm(5));
+        mulsd           (&a, xmm(3), xmm(5));
+        subsd           (&a, xmm(5), xmm(4));
+        movsd_reg_memory(&a, xmm(4), dst_dsp + r);
+
+        mulsd           (&a, xmm(0), xmm(3));
+        mulsd           (&a, xmm(1), xmm(2));
+        addsd           (&a, xmm(3), xmm(2));
+        movsd_reg_memory(&a, xmm(2), dst_dsp + i);
+        break;
+
+      default:
+        fprintf(stderr, "undefined instruction %s (ASCII %x)\n", code, *code);
+        exit(1);
+    }
+  }
+
+  // Return to caller (important!)
+  asm_write(&a, 1, 0xc3);
+
+  return (compiled*) memory;
+}
+
+int main(int argc, char **argv) {
+  compiled fn = compile(argv[1]);
+  complex registers[4];
+  int i, x, y;
+  char line[1600];
+  printf("P5\n%d %d\n%d\n", 1600, 900, 255);
+  for (y = 0; y < 900; ++y) {
+    for (x = 0; x < 1600; ++x) {
+      registers[0].r = 2 * 1.6 * (x / 1600.0 - 0.5);
+      registers[0].i = 2 * 0.9 * (y /  900.0 - 0.5);
+      for (i = 1; i < 4; ++i) registers[i].r = registers[i].i = 0;
+      for (i = 0; i < 256 && sqr(registers[1].r) + sqr(registers[1].i) < 4; ++i)
+        (*fn)(registers);
+      line[x] = i;
+    }
+    fwrite(line, 1, sizeof(line), stdout);
+  }
+  return 0;
+}
 ```
