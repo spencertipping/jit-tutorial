@@ -414,7 +414,7 @@ need encodings for the following instructions:
 
 - `f2 0f 11`: `movsd reg -> memory`
 - `f2 0f 10`: `movsd memory -> reg`
-- `f2 0f 59`: `mulsd reg <- reg` (**NB:** arg order is opposite of `addsd`)
+- `f2 0f 59`: `mulsd reg -> reg`
 - `f2 0f 58`: `addsd reg -> reg`
 - `f2 0f 5c`: `subsd reg -> reg`
 - `66 0f 11`: `movpd reg -> memory` (technically `movupd` for unaligned move)
@@ -471,7 +471,7 @@ void movsd_reg_reg(microasm *a, char src, char dst)
 { asm_write(a, 4, 0xf2, 0x0f, 0x11, 0xc0 | src << 3 | dst); }
 
 void mulsd(microasm *a, char src, char dst)
-{ asm_write(a, 4, 0xf2, 0x0f, 0x59, 0xc0 | src << 3 | dst); }
+{ asm_write(a, 4, 0xf2, 0x0f, 0x59, 0xc0 | dst << 3 | src); }
 
 void addsd(microasm *a, char src, char dst)
 { asm_write(a, 4, 0xf2, 0x0f, 0x58, 0xc0 | dst << 3 | src); }

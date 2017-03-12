@@ -25,7 +25,7 @@ void movsd_reg_reg(microasm *a, char src, char dst)
 { asm_write(a, 4, 0xf2, 0x0f, 0x11, 0xc0 | src << 3 | dst); }
 
 void mulsd(microasm *a, char src, char dst)
-{ asm_write(a, 4, 0xf2, 0x0f, 0x59, 0xc0 | src << 3 | dst); }
+{ asm_write(a, 4, 0xf2, 0x0f, 0x59, 0xc0 | dst << 3 | src); }
 
 void addsd(microasm *a, char src, char dst)
 { asm_write(a, 4, 0xf2, 0x0f, 0x58, 0xc0 | dst << 3 | src); }
