@@ -62,7 +62,7 @@ compiled compile(char *code) {
   // Return to caller (important!)
   asm_write(&a, 1, 0xc3);
 
-  return (compiled*) memory;
+  return (compiled) memory;
 }
 
 int main(int argc, char **argv) {

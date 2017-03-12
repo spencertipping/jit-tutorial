@@ -555,10 +555,10 @@ compiled compile(char *code) {
     }
   }
 
-  // Return to caller (important!)
+  // Return to caller (important! otherwise we'll segfault)
   asm_write(&a, 1, 0xc3);
 
-  return (compiled*) memory;
+  return (compiled) memory;
 }
 
 int main(int argc, char **argv) {
@@ -581,3 +581,48 @@ int main(int argc, char **argv) {
   return 0;
 }
 ```
+
+Now let's benchmark the interpreted and JIT-compiled versions:
+
+```sh
+$ gcc mandeljit.c -o mandeljit
+$ time ./simple *bb+ab > /dev/null
+real	0m2.348s
+user	0m2.344s
+sys	0m0.000s
+$ time ./mandeljit *bb+ab > /dev/null
+real    0m1.462s
+user    0m1.460s
+sys     0m0.000s
+```
+
+Very close to the limit performance of the hardcoded version. And, of course,
+the JIT-compiled result is identical to the interpreted one:
+
+```sh
+$ ./simple *bb+ab | md5sum
+12a1013d55ee17998390809ffd671dbc  -
+$ ./mandeljit *bb+ab | md5sum
+12a1013d55ee17998390809ffd671dbc  -
+```
+
+## Further reading
+### Low-level
+- The Intel guides cover a lot of stuff we didn't end up using here: addressing
+  modes, instructions, etc. If you're serious about writing JIT compilers, it's
+  worth an in-depth read.
+
+- [The V8 source
+  code](https://github.com/v8/v8/blob/master/src/x64/assembler-x64.h): how JIT
+  assemblers are actually written
+
+- [The JVM source
+  code](http://hg.openjdk.java.net/jdk9/hs/hotspot/file/6868eb69ce70/src)
+
+- [Jonesforth](http://git.annexia.org/?p=jonesforth.git;a=blob;f=jonesforth.S;h=45e6e854a5d2a4c3f26af264dfce56379d401425;hb=HEAD):
+  a well-documented example of low-level code generation and interpreter
+  structure (sort of a JIT alternative)
+
+- [Canard machine
+  code](https://github.com/spencertipping/canard/blob/circular/bin/canard.md#introduction):
+  similar to jonesforth, but uses machine code for its data structures
