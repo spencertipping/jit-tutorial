@@ -107,6 +107,17 @@ $
 ![image](http://storage2.static.itmages.com/i/17/0308/h_1488996910_5153802_e6927d8be0.jpeg)
 
 ### Performance analysis
+**In the real world, JIT is absolutely the wrong move for this problem.**
+
+Array languages like APL, Matlab, and to a large extent Perl, Python, etc,
+manage to achieve reasonable performance by having interpreter operations that
+apply over a large number of data elements at a time. We've got exactly that
+situation here: in the real world it's a lot more practical to vectorize the
+operations to apply simultaneously to a screen-worth of data at a time -- then
+we'd have nice options like offloading stuff to a GPU, etc.
+
+However, since the point here is to compile stuff, on we go.
+
 JIT can basically eliminate the interpreter overhead, which we can easily model
 here by replacing `interpret()` with a hard-coded Mandelbrot calculation. This
 will provide an upper bound on realistic JIT performance, since we're unlikely
@@ -164,7 +175,7 @@ sys	0m0.000s
 $
 ```
 
-### JIT design
+### JIT design and the x86-64 calling convention
 The basic strategy is to replace `interpret(registers, code)` with a function
 `compile(code)` that returns a pointer to a function whose signature is this:
 `void compiled(registers*)`. The memory for the function needs to be allocated
@@ -198,7 +209,26 @@ interpret:
         movq    %rdi, -40(%rbp)         // registers arg -> local var
         movq    %rsi, -48(%rbp)         // code arg -> local var
         jmp     for_loop_condition      // commence loopage
+```
 
+Before getting to the rest, I wanted to call out the `%rsi` and `%rdi` stuff
+and explain a bit about how calls work on x86-64. `%rsi` and `%rdi` seem
+arbitrary, which they are to some extent -- C obeys a platform-specific calling
+convention that specifies how arguments get passed in. On x86-64, up to six
+arguments come in as registers; after that they get pushed onto the stack. If
+you're returning a value, it goes into `%rax`.
+
+The return address is automatically pushed onto the stack by `call`
+instructions like `e8 <32-bit relative>`. So internally, `call` is the same as
+`push ADDRESS; jmp <call-site>; ADDRESS: ...`. `ret` is the same as `pop %rip`,
+except that you can't pop into `%rip`. This means that the return address is
+always the most immediate value on the stack.
+
+Part of the calling convention also requires callees to save a couple of
+registers and use `%rbp` to be a copy of `%rsp` at function-call-time, but our
+JIT can mostly ignore this stuff because it doesn't call back into C.
+
+```s
 for_loop_body:
         // (a bunch of stuff to set up *src and *dst)
 
