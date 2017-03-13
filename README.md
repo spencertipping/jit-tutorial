@@ -408,6 +408,10 @@ f(8) = 8
 f(9) = 9
 ```
 
+**TODO:** explanation about userspace page mapping/permissions, and how ELF
+instructions tie into this (maybe also explain stuff like the FD table while
+we're at it)
+
 #### Generating MandelASM machine code
 This is where we start to get some serious mileage out of the Intel manuals. We
 need encodings for the following instructions:
