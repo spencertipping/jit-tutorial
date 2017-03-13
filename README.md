@@ -641,10 +641,32 @@ $ ./mandeljit *bb+ab | md5sum
 ```
 
 ## Further reading
+### Debugging JIT compilers
+First, you need a good scotch; this one should work.
+
+![image](https://cdn1.masterofmalt.com/whiskies/p-2813/laphroaig-quarter-cask-whisky.jpg?ss=2.0)
+
+Once you've got that set up, `gdb` can probably be scripted to do what you
+need. I've [used it somewhat
+successfully](https://github.com/spencertipping/canard/blob/circular/bin/canard.debug.gdb)
+to debug a bunch of hand-written self-modifying machine code with no debugging
+symbols -- the limitations of the approach ended up being whiskey-related
+rather than any deficiency of GDB itself.
+
+I've also had some luck using [radare2](http://www.radare.org/r/) to figure out
+when I was generating bogus instructions.
+
+Offline disassemblers like NASM and YASM won't help you.
+
 ### Low-level
 - The Intel guides cover a lot of stuff we didn't end up using here: addressing
   modes, instructions, etc. If you're serious about writing JIT compilers, it's
   worth an in-depth read.
+
+- [Agner Fog's guides to processor-level
+  optimization](http://www.agner.org/optimize/): an insanely detailed tour
+  through processor internals, instruction parsing pipelines, and pretty much
+  every variant of every processor in existence.
 
 - [The V8 source
   code](https://github.com/v8/v8/blob/master/src/x64/assembler-x64.h): how JIT
