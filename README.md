@@ -7,6 +7,11 @@ detailed knowledge about processor-level optimization.
 That said, though, writing JIT compiler is a lot of fun and a great way to
 learn stuff. The first thing to do is to write an interpreter.
 
+**NOTE:** If you don't have solid grasp of UNIX system-level programming, you
+might want to read about [how to write a
+shell](https://github.com/spencertipping/shell-tutorial), which covers a lot of
+the fundamentals.
+
 ## MandelASM
 GPUs are fine for machine learning, but serious fractal enthusiasts design
 their own processors to generate Mandelbrot sets. And the first step in
