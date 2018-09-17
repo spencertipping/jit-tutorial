@@ -109,7 +109,7 @@ sys	0m0.000s
 $
 ```
 
-![image](http://storage2.static.itmages.com/i/17/0308/h_1488996910_5153802_e6927d8be0.jpeg)
+![image](http://spencertipping.com/mandelbrot-output.png)
 
 ### Performance analysis
 **In the real world, JIT is absolutely the wrong move for this problem.**
