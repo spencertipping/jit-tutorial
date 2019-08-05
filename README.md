@@ -398,7 +398,7 @@ fn compile_identity(void) {
                       MAP_PRIVATE | MAP_ANONYMOUS,
                       -1,               // fd (not used here)
                       0);               // offset (not used here)
-  if (!memory) {
+  if (memory == MAP_FAILED) {
     perror("failed to allocate memory");
     exit(1);
   }
