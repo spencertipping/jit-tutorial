@@ -674,7 +674,7 @@ Offline disassemblers like NASM and YASM won't help you.
   every variant of every processor in existence.
 
 - [The V8 source
-  code](https://github.com/v8/v8/blob/master/src/x64/assembler-x64.h): how JIT
+  code](https://github.com/v8/v8/blob/master/src/codegen/x64/assembler-x64.h): how JIT
   assemblers are actually written
 
 - [The JVM source
