@@ -678,7 +678,7 @@ Offline disassemblers like NASM and YASM won't help you.
   assemblers are actually written
 
 - [The JVM source
-  code](http://hg.openjdk.java.net/jdk9/hs/hotspot/file/6868eb69ce70/src)
+  code](https://github.com/openjdk/jdk/tree/master/src/hotspot/)
 
 - [Jonesforth](http://git.annexia.org/?p=jonesforth.git;a=blob;f=jonesforth.S;h=45e6e854a5d2a4c3f26af264dfce56379d401425;hb=HEAD):
   a well-documented example of low-level code generation and interpreter
